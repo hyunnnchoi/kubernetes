@@ -35,18 +35,19 @@ type scoreMap map[string]map[string]int64
 
 // preScoreState computed at PreScore and used at Score.
 type preScoreState struct {
-	topologyScore scoreMap
-	podInfo       *framework.PodInfo
+	topologyScore scoreMap					// 노드의 Topology key에 따른 점수를 저장함.
+	podInfo       *framework.PodInfo			// 스케줄링 중인 Pod에 대한 정보를 저장함.
 	// A copy of the incoming pod's namespace labels.
-	namespaceLabels labels.Set
+	namespaceLabels labels.Set				
 }
 
 // Clone implements the mandatory Clone interface. We don't really copy the data since
 // there is no need for that.
-func (s *preScoreState) Clone() framework.StateData {
+func (s *preScoreState) Clone() framework.StateData {		// 스케줄링 Cycle의 상태 데이터 복제함. 
 	return s
 }
 
+// AffinityTerm을 처리하고, 해당 노드와 토폴로지 키에 따라 점수를 계산하여 scoreMap에 추가함. 
 func (m scoreMap) processTerm(term *framework.AffinityTerm, weight int32, pod *v1.Pod, nsLabels labels.Set, node *v1.Node, multiplier int32) {
 	if term.Matches(pod, nsLabels) {
 		if tpValue, tpValueExist := node.Labels[term.TopologyKey]; tpValueExist {
@@ -57,13 +58,13 @@ func (m scoreMap) processTerm(term *framework.AffinityTerm, weight int32, pod *v
 		}
 	}
 }
-
+// 여러 어피니티 조건을 받아 processTerm을 호출하여 각 조건을 순차적으로 처리함.
 func (m scoreMap) processTerms(terms []framework.WeightedAffinityTerm, pod *v1.Pod, nsLabels labels.Set, node *v1.Node, multiplier int32) {
 	for _, term := range terms {
 		m.processTerm(&term.AffinityTerm, term.Weight, pod, nsLabels, node, multiplier)
 	}
 }
-
+// 다른 scoreMap에서 현재 맵으로 점수를 추가함. 여러 노드의 데이터 합산할 때.
 func (m scoreMap) append(other scoreMap) {
 	for topology, oScores := range other {
 		scores := m[topology]
@@ -76,7 +77,7 @@ func (m scoreMap) append(other scoreMap) {
 		}
 	}
 }
-
+// 이미 스케줄된 Pod과의 어피니티 및 안티-어피니티 조건을 평가하여 점수를 계산함. 
 func (pl *InterPodAffinity) processExistingPod(
 	state *preScoreState,
 	existingPod *framework.PodInfo,
@@ -124,6 +125,7 @@ func (pl *InterPodAffinity) processExistingPod(
 }
 
 // PreScore builds and writes cycle state used by Score and NormalizeScore.
+// 초기 점수 계산하고, 사이클 상태에 저장함. 
 func (pl *InterPodAffinity) PreScore(
 	pCtx context.Context,
 	cycleState *framework.CycleState,
@@ -222,7 +224,7 @@ func (pl *InterPodAffinity) PreScore(
 	cycleState.Write(preScoreStateKey, state)
 	return nil
 }
-
+// Cycle 상태에서 PreScore 단계의 결과 추출.. 
 func getPreScoreState(cycleState *framework.CycleState) (*preScoreState, error) {
 	c, err := cycleState.Read(preScoreStateKey)
 	if err != nil {
@@ -240,6 +242,7 @@ func getPreScoreState(cycleState *framework.CycleState) (*preScoreState, error) 
 // The "score" returned in this function is the sum of weights got from cycleState which have its topologyKey matching with the node's labels.
 // it is normalized later.
 // Note: the returned "score" is positive for pod-affinity, and negative for pod-antiaffinity.
+// 최종 점수 계산
 func (pl *InterPodAffinity) Score(ctx context.Context, cycleState *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
 	nodeInfo, err := pl.sharedLister.NodeInfos().Get(nodeName)
 	if err != nil {
@@ -262,6 +265,7 @@ func (pl *InterPodAffinity) Score(ctx context.Context, cycleState *framework.Cyc
 }
 
 // NormalizeScore normalizes the score for each filteredNode.
+// 계산된 점수 0~100 사이 정규화
 func (pl *InterPodAffinity) NormalizeScore(ctx context.Context, cycleState *framework.CycleState, pod *v1.Pod, scores framework.NodeScoreList) *framework.Status {
 	s, err := getPreScoreState(cycleState)
 	if err != nil {
