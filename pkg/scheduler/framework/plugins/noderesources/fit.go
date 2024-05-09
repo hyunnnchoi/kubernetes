@@ -35,7 +35,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/names"
 	schedutil "k8s.io/kubernetes/pkg/scheduler/util"
 )
-
+// Fit 구조체가 인터페이스 구현하는지 검증
 var _ framework.PreFilterPlugin = &Fit{}
 var _ framework.FilterPlugin = &Fit{}
 var _ framework.EnqueueExtensions = &Fit{}
@@ -83,6 +83,7 @@ var nodeResourceStrategyTypeMap = map[config.ScoringStrategyType]scorer{
 }
 
 // Fit is a plugin that checks if a node has sufficient resources.
+// 플러그인 설정, 상태 저장
 type Fit struct {
 	ignoredResources                sets.Set[string]
 	ignoredResourceGroups           sets.Set[string]
@@ -121,6 +122,7 @@ func (s *preScoreState) Clone() framework.StateData {
 }
 
 // PreScore calculates incoming pod's resource requests and writes them to the cycle state used.
+// Pod 자원 요청 계산, Cycle에 저장. Scoring에서 이용. 
 func (f *Fit) PreScore(ctx context.Context, cycleState *framework.CycleState, pod *v1.Pod, nodes []*framework.NodeInfo) *framework.Status {
 	state := &preScoreState{
 		podRequests: f.calculatePodResourceRequestList(pod, f.resources),
@@ -148,6 +150,7 @@ func (f *Fit) Name() string {
 }
 
 // NewFit initializes a new plugin and returns it.
+// 플러그인 인스턴스 초기화. 
 func NewFit(_ context.Context, plArgs runtime.Object, h framework.Handle, fts feature.Features) (framework.Plugin, error) {
 	args, ok := plArgs.(*config.NodeResourcesFitArgs)
 	if !ok {
@@ -213,6 +216,7 @@ func computePodResourceRequest(pod *v1.Pod) *preFilterState {
 }
 
 // PreFilter invoked at the prefilter extension point.
+// 최대 리소스 요청 계산, 사이클 상태에 저장. 
 func (f *Fit) PreFilter(ctx context.Context, cycleState *framework.CycleState, pod *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
 	if !f.enableSidecarContainers && hasRestartableInitContainer(pod) {
 		// Scheduler will calculate resources usage for a Pod containing
@@ -374,13 +378,15 @@ func isFit(pod *v1.Pod, node *v1.Node) bool {
 // Filter invoked at the filter extension point.
 // Checks if a node has sufficient resources, such as cpu, memory, gpu, opaque int resources etc to run a pod.
 // It returns a list of insufficient resources, if empty, then the node has all the resources requested by the pod.
+// 요청의 context, 스케줄링 싸이클 상태, 스케줄링 대상 pod, 평가 대상 노드 정보 받아옴.
 func (f *Fit) Filter(ctx context.Context, cycleState *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
-	s, err := getPreFilterState(cycleState)
+	s, err := getPreFilterState(cycleState) // preFilter 결과 가져옴. 
 	if err != nil {
 		return framework.AsStatus(err)
 	}
 
 	insufficientResources := fitsRequest(s, nodeInfo, f.ignoredResources, f.ignoredResourceGroups)
+	// fitsRequest 함수 호출, 현재 노드가 Pod 자원 요구사항 충족하는지 검사. 
 
 	if len(insufficientResources) != 0 {
 		// We will keep all failure reasons.
@@ -389,7 +395,7 @@ func (f *Fit) Filter(ctx context.Context, cycleState *framework.CycleState, pod 
 			failureReasons = append(failureReasons, insufficientResources[i].Reason)
 		}
 		return framework.NewStatus(framework.Unschedulable, failureReasons...)
-	}
+	} // 부족한 리소스 있을 경우, Pod을 해당 노드에 스케줄링 할 수 없다는 status 와 failureReasons 반환.  
 	return nil
 }
 
