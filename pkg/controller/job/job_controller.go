@@ -648,6 +648,10 @@ func (jm *Controller) syncOrphanPod(ctx context.Context, key string) error {
 	}
 	// Make sure the pod is still orphaned.
 	if controllerRef := metav1.GetControllerOf(sharedPod); controllerRef != nil {
+		if controllerRef.Kind != controllerKind.Kind || controllerRef.APIVersion != batch.SchemeGroupVersion.String() {
+			// The pod is controlled by an owner that is not a batch/v1 Job. Do not remove finalizer.
+			return nil
+		}
 		job := jm.resolveControllerRef(sharedPod.Namespace, controllerRef)
 		if job != nil {
 			// Skip cleanup of finalizers for pods owned by a job managed by an external controller
@@ -823,10 +827,7 @@ func (jm *Controller) syncJob(ctx context.Context, key string) (rErr error) {
 	newSucceededPods, newFailedPods := getNewFinishedPods(jobCtx)
 	jobCtx.succeeded = job.Status.Succeeded + int32(len(newSucceededPods)) + int32(len(jobCtx.uncounted.succeeded))
 	jobCtx.failed = job.Status.Failed + int32(nonIgnoredFailedPodsCount(jobCtx, newFailedPods)) + int32(len(jobCtx.uncounted.failed))
-	var ready *int32
-	if feature.DefaultFeatureGate.Enabled(features.JobReadyPods) {
-		ready = ptr.To(countReadyPods(jobCtx.activePods))
-	}
+	ready := ptr.To(countReadyPods(jobCtx.activePods))
 
 	// Job first start. Set StartTime only if the job is not in the suspended state.
 	if job.Status.StartTime == nil && !jobSuspended(&job) {
@@ -895,6 +896,9 @@ func (jm *Controller) syncJob(ctx context.Context, key string) (rErr error) {
 			jobCtx.finishedCondition = nil
 		}
 		active -= deleted
+		if feature.DefaultFeatureGate.Enabled(features.JobPodReplacementPolicy) {
+			*jobCtx.terminating += deleted
+		}
 		manageJobErr = err
 	} else {
 		manageJobCalled := false
@@ -1500,6 +1504,9 @@ func (jm *Controller) manageJob(ctx context.Context, job *batch.Job, jobCtx *syn
 		jm.expectations.ExpectDeletions(logger, jobKey, len(podsToDelete))
 		removed, err := jm.deleteJobPods(ctx, job, jobKey, podsToDelete)
 		active -= removed
+		if feature.DefaultFeatureGate.Enabled(features.JobPodReplacementPolicy) {
+			*jobCtx.terminating += removed
+		}
 		return active, metrics.JobSyncActionPodsDeleted, err
 	}
 
@@ -1549,6 +1556,9 @@ func (jm *Controller) manageJob(ctx context.Context, job *batch.Job, jobCtx *syn
 		logger.V(4).Info("Too many pods running for job", "job", klog.KObj(job), "deleted", len(podsToDelete), "target", wantActive)
 		removed, err := jm.deleteJobPods(ctx, job, jobKey, podsToDelete)
 		active -= removed
+		if feature.DefaultFeatureGate.Enabled(features.JobPodReplacementPolicy) {
+			*jobCtx.terminating += removed
+		}
 		// While it is possible for a Job to require both pod creations and
 		// deletions at the same time (e.g. indexed Jobs with repeated indexes), we
 		// restrict ourselves to either just pod deletion or pod creation in any

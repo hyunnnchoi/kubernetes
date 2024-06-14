@@ -34,6 +34,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
+	noopoteltrace "go.opentelemetry.io/otel/trace/noop"
 
 	cadvisorapi "github.com/google/cadvisor/info/v1"
 	cadvisorapiv2 "github.com/google/cadvisor/info/v2"
@@ -57,6 +58,9 @@ import (
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	internalapi "k8s.io/cri-api/pkg/apis"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
+	remote "k8s.io/cri-client/pkg"
+	fakeremote "k8s.io/cri-client/pkg/fake"
+	"k8s.io/klog/v2"
 	"k8s.io/klog/v2/ktesting"
 	"k8s.io/kubernetes/pkg/features"
 	kubeletconfiginternal "k8s.io/kubernetes/pkg/kubelet/apis/config"
@@ -67,8 +71,6 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/configmap"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	containertest "k8s.io/kubernetes/pkg/kubelet/container/testing"
-	"k8s.io/kubernetes/pkg/kubelet/cri/remote"
-	fakeremote "k8s.io/kubernetes/pkg/kubelet/cri/remote/fake"
 	"k8s.io/kubernetes/pkg/kubelet/eviction"
 	"k8s.io/kubernetes/pkg/kubelet/images"
 	"k8s.io/kubernetes/pkg/kubelet/kuberuntime"
@@ -256,7 +258,7 @@ func newTestKubeletWithImageList(
 	kubelet.cadvisor = &cadvisortest.Fake{}
 	machineInfo, _ := kubelet.cadvisor.MachineInfo()
 	kubelet.setCachedMachineInfo(machineInfo)
-	kubelet.tracer = oteltrace.NewNoopTracerProvider().Tracer("")
+	kubelet.tracer = noopoteltrace.NewTracerProvider().Tracer("")
 
 	fakeMirrorClient := podtest.NewFakeMirrorClient()
 	secretManager := secret.NewSimpleSecretManager(kubelet.kubeClient)
@@ -311,7 +313,7 @@ func newTestKubeletWithImageList(
 		HighThresholdPercent: 90,
 		LowThresholdPercent:  80,
 	}
-	imageGCManager, err := images.NewImageGCManager(fakeRuntime, kubelet.StatsProvider, fakeRecorder, fakeNodeRef, fakeImageGCPolicy, oteltrace.NewNoopTracerProvider())
+	imageGCManager, err := images.NewImageGCManager(fakeRuntime, kubelet.StatsProvider, fakeRecorder, fakeNodeRef, fakeImageGCPolicy, noopoteltrace.NewTracerProvider())
 	assert.NoError(t, err)
 	kubelet.imageManager = &fakeImageGCManager{
 		fakeImageService: fakeRuntime,
@@ -2134,7 +2136,7 @@ func TestGenerateAPIPodStatusWithReasonCache(t *testing.T) {
 				"unknown": {Terminated: &v1.ContainerStateTerminated{
 					ExitCode: 137,
 					Message:  "The container could not be located when the pod was terminated",
-					Reason:   "ContainerStatusUnknown",
+					Reason:   kubecontainer.ContainerReasonStatusUnknown,
 				}},
 			},
 			expectedLastTerminationState: map[string]v1.ContainerState{
@@ -3032,7 +3034,8 @@ func createAndStartFakeRemoteRuntime(t *testing.T) (*fakeremote.RemoteRuntime, s
 }
 
 func createRemoteRuntimeService(endpoint string, t *testing.T, tp oteltrace.TracerProvider) internalapi.RuntimeService {
-	runtimeService, err := remote.NewRemoteRuntimeService(endpoint, 15*time.Second, tp)
+	logger := klog.Background()
+	runtimeService, err := remote.NewRemoteRuntimeService(endpoint, 15*time.Second, tp, &logger)
 	require.NoError(t, err)
 	return runtimeService
 }
@@ -3050,7 +3053,7 @@ func TestNewMainKubeletStandAlone(t *testing.T) {
 		MemoryThrottlingFactor:                    utilpointer.Float64(0),
 	}
 	var prober volume.DynamicPluginProber
-	tp := oteltrace.NewNoopTracerProvider()
+	tp := noopoteltrace.NewTracerProvider()
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	cadvisor := cadvisortest.NewMockInterface(mockCtrl)
@@ -3070,7 +3073,7 @@ func TestNewMainKubeletStandAlone(t *testing.T) {
 		fakeRuntime.Stop()
 	}()
 	fakeRecorder := &record.FakeRecorder{}
-	rtSvc := createRemoteRuntimeService(endpoint, t, oteltrace.NewNoopTracerProvider())
+	rtSvc := createRemoteRuntimeService(endpoint, t, noopoteltrace.NewTracerProvider())
 	kubeDep := &Dependencies{
 		Auth:                 nil,
 		CAdvisorInterface:    cadvisor,
@@ -3190,7 +3193,8 @@ func TestSyncPodSpans(t *testing.T) {
 
 	fakeRuntime.ImageService.SetFakeImageSize(100)
 	fakeRuntime.ImageService.SetFakeImages([]string{"test:latest"})
-	imageSvc, err := remote.NewRemoteImageService(endpoint, 15*time.Second, tp)
+	logger := klog.Background()
+	imageSvc, err := remote.NewRemoteImageService(endpoint, 15*time.Second, tp, &logger)
 	assert.NoError(t, err)
 
 	kubelet.containerRuntime, err = kuberuntime.NewKubeGenericRuntimeManager(

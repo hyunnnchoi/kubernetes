@@ -289,7 +289,8 @@ func TestPostFilter(t *testing.T) {
 				st.MakeNode().Name("node4").Capacity(nodeRes).Obj(),
 			},
 			filteredNodesStatuses: framework.NodeToStatusMap{
-				"node3": framework.NewStatus(framework.UnschedulableAndUnresolvable),
+				"node1": framework.NewStatus(framework.Unschedulable),
+				"node2": framework.NewStatus(framework.Unschedulable),
 				"node4": framework.NewStatus(framework.UnschedulableAndUnresolvable),
 			},
 			wantResult: framework.NewPostFilterResultWithNominatedNode(""),
@@ -364,6 +365,7 @@ func TestPostFilter(t *testing.T) {
 				frameworkruntime.WithExtenders(extenders),
 				frameworkruntime.WithSnapshotSharedLister(internalcache.NewSnapshot(tt.pods, tt.nodes)),
 				frameworkruntime.WithLogger(logger),
+				frameworkruntime.WithWaitingPods(frameworkruntime.NewWaitingPodsMap()),
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -1702,6 +1704,8 @@ func TestPreempt(t *testing.T) {
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 
+			waitingPods := frameworkruntime.NewWaitingPodsMap()
+
 			cache := internalcache.New(ctx, time.Duration(0))
 			for _, pod := range test.pods {
 				cache.AddPod(logger, pod)
@@ -1745,6 +1749,7 @@ func TestPreempt(t *testing.T) {
 				frameworkruntime.WithPodNominator(internalqueue.NewPodNominator(informerFactory.Core().V1().Pods().Lister())),
 				frameworkruntime.WithSnapshotSharedLister(internalcache.NewSnapshot(test.pods, nodes)),
 				frameworkruntime.WithInformerFactory(informerFactory),
+				frameworkruntime.WithWaitingPods(waitingPods),
 				frameworkruntime.WithLogger(logger),
 			)
 			if err != nil {
@@ -1772,7 +1777,15 @@ func TestPreempt(t *testing.T) {
 				State:      state,
 				Interface:  &pl,
 			}
-			res, status := pe.Preempt(ctx, test.pod, make(framework.NodeToStatusMap))
+
+			// so that these nodes are eligible for preemption, we set their status
+			// to Unschedulable.
+			nodeToStatusMap := make(framework.NodeToStatusMap, len(nodes))
+			for _, n := range nodes {
+				nodeToStatusMap[n.Name] = framework.NewStatus(framework.Unschedulable)
+			}
+
+			res, status := pe.Preempt(ctx, test.pod, nodeToStatusMap)
 			if !status.IsSuccess() && !status.IsRejected() {
 				t.Errorf("unexpected error in preemption: %v", status.AsError())
 			}

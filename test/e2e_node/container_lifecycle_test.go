@@ -799,7 +799,7 @@ var _ = SIGDescribe(framework.WithNodeConformance(), "Containers Lifecycle", fun
 				PreStop: &v1.LifecycleHandler{
 					Exec: &v1.ExecAction{
 						Command: ExecCommand(prefixedName(PreStopPrefix, regular1), execCommand{
-							Delay:         1,
+							Delay:         10,
 							ExitCode:      0,
 							ContainerName: regular1,
 						}),
@@ -834,9 +834,9 @@ var _ = SIGDescribe(framework.WithNodeConformance(), "Containers Lifecycle", fun
 
 			ginkgo.By("Analyzing results")
 			// readiness probes are called during pod termination
-			framework.ExpectNoError(results.RunTogether(prefixedName(PreStopPrefix, regular1), prefixedName(ReadinessPrefix, regular1)))
+			framework.ExpectNoError(results.RunTogetherLhsFirst(prefixedName(PreStopPrefix, regular1), prefixedName(ReadinessPrefix, regular1)))
 			// liveness probes are not called during pod termination
-			err = results.RunTogether(prefixedName(PreStopPrefix, regular1), prefixedName(LivenessPrefix, regular1))
+			err = results.RunTogetherLhsFirst(prefixedName(PreStopPrefix, regular1), prefixedName(LivenessPrefix, regular1))
 			gomega.Expect(err).To(gomega.HaveOccurred())
 		})
 
@@ -897,11 +897,11 @@ var _ = SIGDescribe(framework.WithNodeConformance(), "Containers Lifecycle", fun
 			ginkgo.By("Analyzing results")
 			// FIXME ExpectNoError: this will be implemented in KEP 4438
 			// liveness probes are called for restartable init containers during pod termination
-			err = results.RunTogether(prefixedName(PreStopPrefix, regular1), prefixedName(LivenessPrefix, restartableInit1))
+			err = results.RunTogetherLhsFirst(prefixedName(PreStopPrefix, regular1), prefixedName(LivenessPrefix, restartableInit1))
 			gomega.Expect(err).To(gomega.HaveOccurred())
 			// FIXME ExpectNoError: this will be implemented in KEP 4438
 			// restartable init containers are restarted during pod termination
-			err = results.RunTogether(prefixedName(PreStopPrefix, regular1), restartableInit1)
+			err = results.RunTogetherLhsFirst(prefixedName(PreStopPrefix, regular1), restartableInit1)
 			gomega.Expect(err).To(gomega.HaveOccurred())
 		})
 	})
@@ -909,7 +909,7 @@ var _ = SIGDescribe(framework.WithNodeConformance(), "Containers Lifecycle", fun
 
 var _ = SIGDescribe(framework.WithSerial(), "Containers Lifecycle", func() {
 	f := framework.NewDefaultFramework("containers-lifecycle-test-serial")
-	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 
 	ginkgo.It("should restart the containers in right order after the node reboot", func(ctx context.Context) {
 		init1 := "init-1"
@@ -1049,7 +1049,7 @@ var _ = SIGDescribe(framework.WithSerial(), "Containers Lifecycle", func() {
 
 var _ = SIGDescribe(nodefeature.SidecarContainers, "Containers Lifecycle", func() {
 	f := framework.NewDefaultFramework("containers-lifecycle-test")
-	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 
 	ginkgo.When("using a Pod with restartPolicy=Never, three init container and two restartable init containers", ginkgo.Ordered, func() {
 
@@ -1147,12 +1147,8 @@ var _ = SIGDescribe(nodefeature.SidecarContainers, "Containers Lifecycle", func(
 			framework.ExpectNoError(results.ExitsBefore(init1, restartableInit1))
 		})
 
-		ginkgo.It("should start first restartable init container before starting second init container", func() {
-			framework.ExpectNoError(results.StartsBefore(restartableInit1, init2))
-		})
-
 		ginkgo.It("should run first init container and first restartable init container together", func() {
-			framework.ExpectNoError(results.RunTogether(restartableInit1, init2))
+			framework.ExpectNoError(results.RunTogetherLhsFirst(restartableInit1, init2))
 		})
 
 		ginkgo.It("should run second init container to completion before starting second restartable init container", func() {
@@ -3123,7 +3119,7 @@ var _ = SIGDescribe(nodefeature.SidecarContainers, "Containers Lifecycle", func(
 
 var _ = SIGDescribe(nodefeature.SidecarContainers, framework.WithSerial(), "Containers Lifecycle", func() {
 	f := framework.NewDefaultFramework("containers-lifecycle-test-serial")
-	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 
 	ginkgo.It("should restart the containers in right order after the node reboot", func(ctx context.Context) {
 		init1 := "init-1"

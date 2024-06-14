@@ -141,13 +141,6 @@ const (
 	// Enables the Portworx in-tree driver to Portworx migration feature.
 	CSIMigrationPortworx featuregate.Feature = "CSIMigrationPortworx"
 
-	// owner: @humblec
-	// alpha: v1.23
-	// deprecated: v1.28
-	//
-	// Enables the RBD in-tree driver to RBD CSI Driver  migration feature.
-	CSIMigrationRBD featuregate.Feature = "CSIMigrationRBD"
-
 	// owner: @fengzixu
 	// alpha: v1.21
 	//
@@ -177,6 +170,7 @@ const (
 	// kep: http://kep.k8s.io/4009
 	// alpha: v1.28
 	// beta: v1.29
+	// GA: v1.30
 	//
 	// Add support for CDI Device IDs in the Device Plugin API.
 	DevicePluginCDIDevices featuregate.Feature = "DevicePluginCDIDevices"
@@ -305,13 +299,6 @@ const (
 	// Disables the Portworx in-tree driver.
 	InTreePluginPortworxUnregister featuregate.Feature = "InTreePluginPortworxUnregister"
 
-	// owner: @humblec
-	// alpha: v1.23
-	// deprecated: v1.28
-	//
-	// Disables the RBD in-tree driver.
-	InTreePluginRBDUnregister featuregate.Feature = "InTreePluginRBDUnregister"
-
 	// owner: @divyenpatel
 	// alpha: v1.21
 	//
@@ -358,13 +345,6 @@ const (
 	// Allow users to specify when a Job can be declared as succeeded
 	// based on the set of succeeded pods.
 	JobSuccessPolicy featuregate.Feature = "JobSuccessPolicy"
-
-	// owner: @alculquicondor
-	// alpha: v1.23
-	// beta: v1.24
-	//
-	// Track the number of pods with Ready condition in the Job status.
-	JobReadyPods featuregate.Feature = "JobReadyPods"
 
 	// owner: @marquiz
 	// kep: http://kep.k8s.io/4033
@@ -446,6 +426,7 @@ const (
 	// owner: @sanposhiho
 	// kep: https://kep.k8s.io/3633
 	// alpha: v1.29
+	// beta: v1.30
 	//
 	// Enables the MatchLabelKeys and MismatchLabelKeys in PodAffinity and PodAntiAffinity.
 	MatchLabelKeysInPodAffinity featuregate.Feature = "MatchLabelKeysInPodAffinity"
@@ -636,15 +617,6 @@ const (
 	// bursting into resources requested at higher QoS levels (memory only for now)
 	QOSReserved featuregate.Feature = "QOSReserved"
 
-	// owner: @chrishenzie
-	// kep: https://kep.k8s.io/2485
-	// alpha: v1.22
-	// beta: v1.27
-	// GA: v1.29
-	//
-	// Enables usage of the ReadWriteOncePod PersistentVolume access mode.
-	ReadWriteOncePod featuregate.Feature = "ReadWriteOncePod"
-
 	// owner: @gnufied
 	// kep: https://kep.k8s.io/1790
 	// alpha: v1.23
@@ -658,6 +630,14 @@ const (
 	//
 	// Allow almost all printable ASCII characters in environment variables
 	RelaxedEnvironmentVariableValidation featuregate.Feature = "RelaxedEnvironmentVariableValidation"
+
+	// owner: @zhangweikop
+	// beta: v1.31
+	//
+	// Enable kubelet tls server to update certificate if the specified certificate files are changed.
+	// This feature is useful when specifying tlsCertFile & tlsPrivateKeyFile in kubelet Configuration.
+	// No effect for other cases such as using serverTLSbootstap.
+	ReloadKubeletServerCertificateFile featuregate.Feature = "ReloadKubeletServerCertificateFile"
 
 	// owner: @mikedanese
 	// alpha: v1.7
@@ -711,6 +691,7 @@ const (
 	// owner: @munnerz
 	// kep: http://kep.k8s.io/4193
 	// alpha: v1.29
+	// beta: v1.31
 	//
 	// Controls whether the apiserver supports binding service account tokens to Node objects.
 	ServiceAccountTokenNodeBinding featuregate.Feature = "ServiceAccountTokenNodeBinding"
@@ -946,6 +927,13 @@ const (
 	//
 	// Allows recursive read-only mounts.
 	RecursiveReadOnlyMounts featuregate.Feature = "RecursiveReadOnlyMounts"
+
+	// owner: @everpeace
+	// kep: https://kep.k8s.io/3619
+	// alpha: v1.31
+	//
+	// Enable SupplementalGroupsPolicy feature in PodSecurityContext
+	SupplementalGroupsPolicy featuregate.Feature = "SupplementalGroupsPolicy"
 )
 
 func init() {
@@ -996,8 +984,6 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	CSIMigrationPortworx: {Default: false, PreRelease: featuregate.Beta}, // Off by default (requires Portworx CSI driver)
 
-	CSIMigrationRBD: {Default: false, PreRelease: featuregate.Deprecated}, //  deprecated in 1.28, remove in 1.31
-
 	CSIVolumeHealth: {Default: false, PreRelease: featuregate.Alpha},
 
 	CloudControllerManagerWebhook: {Default: false, PreRelease: featuregate.Alpha},
@@ -1012,7 +998,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	DisableNodeKubeProxyVersion: {Default: true, PreRelease: featuregate.Beta},
 
-	DevicePluginCDIDevices: {Default: true, PreRelease: featuregate.Beta},
+	DevicePluginCDIDevices: {Default: true, PreRelease: featuregate.GA},
 
 	DynamicResourceAllocation: {Default: false, PreRelease: featuregate.Alpha},
 
@@ -1044,8 +1030,6 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	InTreePluginPortworxUnregister: {Default: false, PreRelease: featuregate.Alpha},
 
-	InTreePluginRBDUnregister: {Default: false, PreRelease: featuregate.Deprecated}, // deprecated in 1.28, remove in 1.31
-
 	InTreePluginvSphereUnregister: {Default: false, PreRelease: featuregate.Alpha},
 
 	JobBackoffLimitPerIndex: {Default: true, PreRelease: featuregate.Beta},
@@ -1057,8 +1041,6 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	JobPodReplacementPolicy: {Default: true, PreRelease: featuregate.Beta},
 
 	JobSuccessPolicy: {Default: false, PreRelease: featuregate.Alpha},
-
-	JobReadyPods: {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.31
 
 	KubeletCgroupDriverFromCRI: {Default: false, PreRelease: featuregate.Alpha},
 
@@ -1080,7 +1062,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	LogarithmicScaleDown: {Default: true, PreRelease: featuregate.Beta},
 
-	MatchLabelKeysInPodAffinity: {Default: false, PreRelease: featuregate.Alpha},
+	MatchLabelKeysInPodAffinity: {Default: true, PreRelease: featuregate.Beta},
 
 	MatchLabelKeysInPodTopologySpread: {Default: true, PreRelease: featuregate.Beta},
 
@@ -1128,11 +1110,11 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	QOSReserved: {Default: false, PreRelease: featuregate.Alpha},
 
-	ReadWriteOncePod: {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.31
-
 	RecoverVolumeExpansionFailure: {Default: false, PreRelease: featuregate.Alpha},
 
 	RelaxedEnvironmentVariableValidation: {Default: false, PreRelease: featuregate.Alpha},
+
+	ReloadKubeletServerCertificateFile: {Default: true, PreRelease: featuregate.Beta},
 
 	RotateKubeletServerCertificate: {Default: true, PreRelease: featuregate.Beta},
 
@@ -1148,7 +1130,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	ServiceAccountTokenPodNodeInfo: {Default: true, PreRelease: featuregate.Beta},
 
-	ServiceAccountTokenNodeBinding: {Default: false, PreRelease: featuregate.Alpha},
+	ServiceAccountTokenNodeBinding: {Default: true, PreRelease: featuregate.Beta},
 
 	ServiceAccountTokenNodeBindingValidation: {Default: true, PreRelease: featuregate.Beta},
 
@@ -1204,6 +1186,8 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	SELinuxMount: {Default: false, PreRelease: featuregate.Alpha},
 
+	SupplementalGroupsPolicy: {Default: false, PreRelease: featuregate.Alpha},
+
 	// inherited features from generic apiserver, relisted here to get a conflict if it is changed
 	// unintentionally on either side:
 
@@ -1241,6 +1225,8 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	genericfeatures.RemainingItemCount: {Default: true, PreRelease: featuregate.GA, LockToDefault: true},
 
+	genericfeatures.ResilientWatchCacheInitialization: {Default: true, PreRelease: featuregate.Beta},
+
 	genericfeatures.SeparateCacheWatchRPC: {Default: true, PreRelease: featuregate.Beta},
 
 	genericfeatures.ServerSideApply: {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.29
@@ -1250,6 +1236,10 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	genericfeatures.StorageVersionAPI: {Default: false, PreRelease: featuregate.Alpha},
 
 	genericfeatures.StorageVersionHash: {Default: true, PreRelease: featuregate.Beta},
+
+	genericfeatures.StrictCostEnforcementForVAP: {Default: false, PreRelease: featuregate.Beta},
+
+	genericfeatures.StrictCostEnforcementForWebhooks: {Default: false, PreRelease: featuregate.Beta},
 
 	genericfeatures.StructuredAuthenticationConfiguration: {Default: true, PreRelease: featuregate.Beta},
 

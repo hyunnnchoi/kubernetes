@@ -52,7 +52,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
-	utilpointer "k8s.io/utils/pointer"
 	"k8s.io/utils/ptr"
 )
 
@@ -68,7 +67,7 @@ func TestDescribePod(t *testing.T) {
 	gracePeriod := int64(1234)
 	condition1 := corev1.PodConditionType("condition1")
 	condition2 := corev1.PodConditionType("condition2")
-	fake := fake.NewSimpleClientset(&corev1.Pod{
+	runningPod := corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:                       "bar",
 			Namespace:                  "foo",
@@ -86,6 +85,7 @@ func TestDescribePod(t *testing.T) {
 			},
 		},
 		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
 			Conditions: []corev1.PodCondition{
 				{
 					Type:   condition1,
@@ -93,18 +93,46 @@ func TestDescribePod(t *testing.T) {
 				},
 			},
 		},
-	})
-	c := &describeClient{T: t, Namespace: "foo", Interface: fake}
-	d := PodDescriber{c}
-	out, err := d.Describe("foo", "bar", DescriberSettings{ShowEvents: true})
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
 	}
-	if !strings.Contains(out, "bar") || !strings.Contains(out, "Status:") {
-		t.Errorf("unexpected out: %s", out)
+	tests := []struct {
+		name       string
+		namespace  string
+		phase      corev1.PodPhase
+		wantOutput []string
+	}{
+		{
+			name: "foo", namespace: "bar", phase: "Running",
+			wantOutput: []string{"bar", "Status:", "Terminating (lasts 10y)", "Termination Grace Period", "1234s"},
+		},
+		{
+			name: "pod1", namespace: "ns1", phase: "Pending",
+			wantOutput: []string{"pod1", "ns1", "Terminating (lasts 10y)", "Termination Grace Period", "1234s"},
+		},
+		{
+			name: "pod2", namespace: "ns2", phase: "Succeeded",
+			wantOutput: []string{"pod2", "ns2", "Succeeded"},
+		},
+		{
+			name: "pod3", namespace: "ns3", phase: "Failed",
+			wantOutput: []string{"pod3", "ns3", "Failed"},
+		},
 	}
-	if !strings.Contains(out, "Terminating (lasts 10y)") || !strings.Contains(out, "1234s") {
-		t.Errorf("unexpected out: %s", out)
+
+	for i, test := range tests {
+		pod := runningPod.DeepCopy()
+		pod.Name, pod.Namespace, pod.Status.Phase = test.name, test.namespace, test.phase
+		fake := fake.NewSimpleClientset(pod)
+		c := &describeClient{T: t, Namespace: pod.Namespace, Interface: fake}
+		d := PodDescriber{c}
+		out, err := d.Describe(pod.Namespace, pod.Name, DescriberSettings{ShowEvents: true})
+		if err != nil {
+			t.Errorf("case %d: unexpected error: %v", i, err)
+		}
+		for _, wantStr := range test.wantOutput {
+			if !strings.Contains(out, wantStr) {
+				t.Errorf("case %d didn't contain want(%s): unexpected out:\n%s", i, wantStr, out)
+			}
+		}
 	}
 }
 
@@ -1374,7 +1402,7 @@ func TestDefaultDescribers(t *testing.T) {
 
 	out, err = DefaultObjectDescriber.DescribeObject(&corev1.ReplicationController{
 		ObjectMeta: metav1.ObjectMeta{Name: "foo"},
-		Spec:       corev1.ReplicationControllerSpec{Replicas: utilpointer.Int32(1)},
+		Spec:       corev1.ReplicationControllerSpec{Replicas: ptr.To[int32](1)},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1393,7 +1421,7 @@ func TestDefaultDescribers(t *testing.T) {
 
 	out, err = DefaultObjectDescriber.DescribeObject(&appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "foo"},
-		Spec:       appsv1.StatefulSetSpec{Replicas: utilpointer.Int32(1)},
+		Spec:       appsv1.StatefulSetSpec{Replicas: ptr.To[int32](1)},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -2263,7 +2291,7 @@ func TestDescribeDeployment(t *testing.T) {
 						CreationTimestamp: metav1.NewTime(time.Date(2021, time.Month(1), 1, 0, 0, 0, 0, time.UTC)),
 					},
 					Spec: appsv1.DeploymentSpec{
-						Replicas: utilpointer.Int32Ptr(1),
+						Replicas: ptr.To[int32](1),
 						Selector: &metav1.LabelSelector{
 							MatchLabels: labels,
 						},
@@ -2308,13 +2336,13 @@ func TestDescribeDeployment(t *testing.T) {
 						Labels:    labels,
 						OwnerReferences: []metav1.OwnerReference{
 							{
-								Controller: utilpointer.BoolPtr(true),
+								Controller: ptr.To(true),
 								UID:        "00000000-0000-0000-0000-000000000001",
 							},
 						},
 					},
 					Spec: appsv1.ReplicaSetSpec{
-						Replicas: utilpointer.Int32Ptr(1),
+						Replicas: ptr.To[int32](1),
 						Selector: &metav1.LabelSelector{
 							MatchLabels: labels,
 						},
@@ -2386,7 +2414,7 @@ func TestDescribeDeployment(t *testing.T) {
 						CreationTimestamp: metav1.NewTime(time.Date(2021, time.Month(1), 1, 0, 0, 0, 0, time.UTC)),
 					},
 					Spec: appsv1.DeploymentSpec{
-						Replicas: utilpointer.Int32Ptr(2),
+						Replicas: ptr.To[int32](2),
 						Selector: &metav1.LabelSelector{
 							MatchLabels: labels,
 						},
@@ -2438,13 +2466,13 @@ func TestDescribeDeployment(t *testing.T) {
 						UID:       "00000000-0000-0000-0000-000000000001",
 						OwnerReferences: []metav1.OwnerReference{
 							{
-								Controller: utilpointer.BoolPtr(true),
+								Controller: ptr.To(true),
 								UID:        "00000000-0000-0000-0000-000000000001",
 							},
 						},
 					},
 					Spec: appsv1.ReplicaSetSpec{
-						Replicas: utilpointer.Int32Ptr(2),
+						Replicas: ptr.To[int32](2),
 						Selector: &metav1.LabelSelector{
 							MatchLabels: labels,
 						},
@@ -2495,13 +2523,13 @@ func TestDescribeDeployment(t *testing.T) {
 						UID:       "00000000-0000-0000-0000-000000000002",
 						OwnerReferences: []metav1.OwnerReference{
 							{
-								Controller: utilpointer.BoolPtr(true),
+								Controller: ptr.To(true),
 								UID:        "00000000-0000-0000-0000-000000000001",
 							},
 						},
 					},
 					Spec: appsv1.ReplicaSetSpec{
-						Replicas: utilpointer.Int32Ptr(1),
+						Replicas: ptr.To[int32](1),
 						Selector: &metav1.LabelSelector{
 							MatchLabels: labels,
 						},
@@ -2646,7 +2674,7 @@ func TestDescribeDeployment(t *testing.T) {
 						CreationTimestamp: metav1.NewTime(time.Date(2021, time.Month(1), 1, 0, 0, 0, 0, time.UTC)),
 					},
 					Spec: appsv1.DeploymentSpec{
-						Replicas: utilpointer.Int32Ptr(2),
+						Replicas: ptr.To[int32](2),
 						Selector: &metav1.LabelSelector{
 							MatchLabels: labels,
 						},
@@ -2698,13 +2726,13 @@ func TestDescribeDeployment(t *testing.T) {
 						UID:       "00000000-0000-0000-0000-000000000001",
 						OwnerReferences: []metav1.OwnerReference{
 							{
-								Controller: utilpointer.BoolPtr(true),
+								Controller: ptr.To(true),
 								UID:        "00000000-0000-0000-0000-000000000001",
 							},
 						},
 					},
 					Spec: appsv1.ReplicaSetSpec{
-						Replicas: utilpointer.Int32Ptr(0),
+						Replicas: ptr.To[int32](0),
 						Selector: &metav1.LabelSelector{
 							MatchLabels: labels,
 						},
@@ -2755,13 +2783,13 @@ func TestDescribeDeployment(t *testing.T) {
 						UID:       "00000000-0000-0000-0000-000000000002",
 						OwnerReferences: []metav1.OwnerReference{
 							{
-								Controller: utilpointer.BoolPtr(true),
+								Controller: ptr.To(true),
 								UID:        "00000000-0000-0000-0000-000000000001",
 							},
 						},
 					},
 					Spec: appsv1.ReplicaSetSpec{
-						Replicas: utilpointer.Int32Ptr(2),
+						Replicas: ptr.To[int32](2),
 						Selector: &metav1.LabelSelector{
 							MatchLabels: labels,
 						},
@@ -3017,8 +3045,8 @@ func TestDescribeJob(t *testing.T) {
 				},
 				Spec: batchv1.JobSpec{
 					Suspend:                 ptr.To(true),
-					TTLSecondsAfterFinished: ptr.To(int32(123)),
-					BackoffLimit:            ptr.To(int32(1)),
+					TTLSecondsAfterFinished: ptr.To[int32](123),
+					BackoffLimit:            ptr.To[int32](1),
 				},
 			},
 			wantElements: []string{
@@ -3138,7 +3166,7 @@ func TestDescribeIngress(t *testing.T) {
 
 	backendResource := networkingv1.IngressBackend{
 		Resource: &corev1.TypedLocalObjectReference{
-			APIGroup: utilpointer.StringPtr("example.com"),
+			APIGroup: ptr.To("example.com"),
 			Kind:     "foo",
 			Name:     "bar",
 		},
@@ -3632,7 +3660,7 @@ Events:       <none>
 }
 
 func TestDescribeCSINode(t *testing.T) {
-	limit := utilpointer.Int32Ptr(int32(2))
+	limit := ptr.To[int32](2)
 	f := fake.NewSimpleClientset(&storagev1.CSINode{
 		ObjectMeta: metav1.ObjectMeta{Name: "foo"},
 		Spec: storagev1.CSINodeSpec{
@@ -4538,7 +4566,7 @@ func TestDescribeHorizontalPodAutoscaler(t *testing.T) {
 					},
 					Behavior: &autoscalingv2.HorizontalPodAutoscalerBehavior{
 						ScaleUp: &autoscalingv2.HPAScalingRules{
-							StabilizationWindowSeconds: utilpointer.Int32Ptr(30),
+							StabilizationWindowSeconds: ptr.To[int32](30),
 							SelectPolicy:               &maxSelectPolicy,
 							Policies: []autoscalingv2.HPAScalingPolicy{
 								{Type: autoscalingv2.PodsScalingPolicy, Value: 10, PeriodSeconds: 10},
@@ -4573,7 +4601,7 @@ func TestDescribeHorizontalPodAutoscaler(t *testing.T) {
 					},
 					Behavior: &autoscalingv2.HorizontalPodAutoscalerBehavior{
 						ScaleDown: &autoscalingv2.HPAScalingRules{
-							StabilizationWindowSeconds: utilpointer.Int32Ptr(30),
+							StabilizationWindowSeconds: ptr.To[int32](30),
 							Policies: []autoscalingv2.HPAScalingPolicy{
 								{Type: autoscalingv2.PodsScalingPolicy, Value: 10, PeriodSeconds: 10},
 								{Type: autoscalingv2.PercentScalingPolicy, Value: 10, PeriodSeconds: 10},
@@ -4749,7 +4777,7 @@ func TestDescribeEvents(t *testing.T) {
 					Namespace: "foo",
 				},
 				Spec: appsv1.DeploymentSpec{
-					Replicas: utilpointer.Int32Ptr(1),
+					Replicas: ptr.To[int32](1),
 					Selector: &metav1.LabelSelector{},
 				},
 			}, events),
@@ -4815,7 +4843,7 @@ func TestDescribeEvents(t *testing.T) {
 					Namespace: "foo",
 				},
 				Spec: appsv1.ReplicaSetSpec{
-					Replicas: utilpointer.Int32Ptr(1),
+					Replicas: ptr.To[int32](1),
 				},
 			}, events),
 		},
@@ -4826,7 +4854,7 @@ func TestDescribeEvents(t *testing.T) {
 					Namespace: "foo",
 				},
 				Spec: corev1.ReplicationControllerSpec{
-					Replicas: utilpointer.Int32Ptr(1),
+					Replicas: ptr.To[int32](1),
 				},
 			}, events),
 		},
@@ -5088,7 +5116,7 @@ Parameters:
 				Spec: networkingv1beta1.IngressClassSpec{
 					Controller: "example.com/controller",
 					Parameters: &networkingv1beta1.IngressClassParametersReference{
-						APIGroup: utilpointer.StringPtr("v1"),
+						APIGroup: ptr.To("v1"),
 						Kind:     "ConfigMap",
 						Name:     "example-parameters",
 					},
@@ -5104,7 +5132,7 @@ Parameters:
 				Spec: networkingv1.IngressClassSpec{
 					Controller: "example.com/controller",
 					Parameters: &networkingv1.IngressClassParametersReference{
-						APIGroup: utilpointer.StringPtr("v1"),
+						APIGroup: ptr.To("v1"),
 						Kind:     "ConfigMap",
 						Name:     "example-parameters",
 					},
@@ -6186,7 +6214,7 @@ func TestDescribeEndpointSlice(t *testing.T) {
 				Endpoints: []discoveryv1beta1.Endpoint{
 					{
 						Addresses:  []string{"1.2.3.4", "1.2.3.5"},
-						Conditions: discoveryv1beta1.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+						Conditions: discoveryv1beta1.EndpointConditions{Ready: ptr.To(true)},
 						TargetRef:  &corev1.ObjectReference{Kind: "Pod", Name: "test-123"},
 						Topology: map[string]string{
 							"topology.kubernetes.io/zone":   "us-central1-a",
@@ -6194,7 +6222,7 @@ func TestDescribeEndpointSlice(t *testing.T) {
 						},
 					}, {
 						Addresses:  []string{"1.2.3.6", "1.2.3.7"},
-						Conditions: discoveryv1beta1.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+						Conditions: discoveryv1beta1.EndpointConditions{Ready: ptr.To(true)},
 						TargetRef:  &corev1.ObjectReference{Kind: "Pod", Name: "test-124"},
 						Topology: map[string]string{
 							"topology.kubernetes.io/zone":   "us-central1-b",
@@ -6246,15 +6274,15 @@ Events:         <none>` + "\n",
 				Endpoints: []discoveryv1.Endpoint{
 					{
 						Addresses:  []string{"1.2.3.4", "1.2.3.5"},
-						Conditions: discoveryv1.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+						Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true)},
 						TargetRef:  &corev1.ObjectReference{Kind: "Pod", Name: "test-123"},
-						Zone:       utilpointer.StringPtr("us-central1-a"),
-						NodeName:   utilpointer.StringPtr("node-1"),
+						Zone:       ptr.To("us-central1-a"),
+						NodeName:   ptr.To("node-1"),
 					}, {
 						Addresses:  []string{"1.2.3.6", "1.2.3.7"},
-						Conditions: discoveryv1.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
+						Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true)},
 						TargetRef:  &corev1.ObjectReference{Kind: "Pod", Name: "test-124"},
-						NodeName:   utilpointer.StringPtr("node-2"),
+						NodeName:   ptr.To("node-2"),
 					},
 				},
 				Ports: []discoveryv1.EndpointPort{
@@ -6457,7 +6485,7 @@ func TestControllerRef(t *testing.T) {
 				Name:            "barpod",
 				Namespace:       "foo",
 				Labels:          map[string]string{"abc": "xyz"},
-				OwnerReferences: []metav1.OwnerReference{{Name: "bar", UID: "123456", Controller: utilpointer.BoolPtr(true)}},
+				OwnerReferences: []metav1.OwnerReference{{Name: "bar", UID: "123456", Controller: ptr.To(true)}},
 			},
 			TypeMeta: metav1.TypeMeta{
 				Kind: "Pod",
@@ -6494,7 +6522,7 @@ func TestControllerRef(t *testing.T) {
 				Name:            "buzpod",
 				Namespace:       "foo",
 				Labels:          map[string]string{"abc": "xyz"},
-				OwnerReferences: []metav1.OwnerReference{{Name: "buz", UID: "654321", Controller: utilpointer.BoolPtr(true)}},
+				OwnerReferences: []metav1.OwnerReference{{Name: "buz", UID: "654321", Controller: ptr.To(true)}},
 			},
 			TypeMeta: metav1.TypeMeta{
 				Kind: "Pod",
