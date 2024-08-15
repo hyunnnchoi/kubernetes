@@ -76,14 +76,14 @@ func (pl *CSILimits) Name() string {
 
 // EventsToRegister returns the possible events that may make a Pod.
 // failed by this plugin schedulable.
-func (pl *CSILimits) EventsToRegister() []framework.ClusterEventWithHint {
+func (pl *CSILimits) EventsToRegister(_ context.Context) ([]framework.ClusterEventWithHint, error) {
 	return []framework.ClusterEventWithHint{
 		// We don't register any `QueueingHintFn` intentionally
 		// because any new CSINode could make pods that were rejected by CSI volumes schedulable.
 		{Event: framework.ClusterEvent{Resource: framework.CSINode, ActionType: framework.Add}},
 		{Event: framework.ClusterEvent{Resource: framework.Pod, ActionType: framework.Delete}, QueueingHintFn: pl.isSchedulableAfterPodDeleted},
-		{Event: framework.ClusterEvent{Resource: framework.PersistentVolumeClaim, ActionType: framework.Add}},
-	}
+		{Event: framework.ClusterEvent{Resource: framework.PersistentVolumeClaim, ActionType: framework.Add}, QueueingHintFn: pl.isSchedulableAfterPVCAdded},
+	}, nil
 }
 
 func (pl *CSILimits) isSchedulableAfterPodDeleted(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (framework.QueueingHint, error) {
@@ -107,6 +107,38 @@ func (pl *CSILimits) isSchedulableAfterPodDeleted(logger klog.Logger, pod *v1.Po
 	}
 
 	logger.V(5).Info("The deleted pod does not impact the scheduling of the unscheduled pod", "deletedPod", klog.KObj(pod), "pod", klog.KObj(deletedPod))
+	return framework.QueueSkip, nil
+}
+
+func (pl *CSILimits) isSchedulableAfterPVCAdded(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (framework.QueueingHint, error) {
+	_, addedPvc, err := util.As[*v1.PersistentVolumeClaim](oldObj, newObj)
+	if err != nil {
+		return framework.Queue, fmt.Errorf("unexpected objects in isSchedulableAfterPVCAdded: %w", err)
+	}
+
+	if addedPvc.Namespace != pod.Namespace {
+		return framework.QueueSkip, nil
+	}
+
+	for _, volumes := range pod.Spec.Volumes {
+		var pvcName string
+		switch {
+		case volumes.PersistentVolumeClaim != nil:
+			pvcName = volumes.PersistentVolumeClaim.ClaimName
+		case volumes.Ephemeral != nil:
+			pvcName = ephemeral.VolumeClaimName(pod, &volumes)
+		default:
+			// Volume is not using a PVC, ignore
+			continue
+		}
+
+		if pvcName == addedPvc.Name {
+			logger.V(5).Info("PVC that is referred from the pod was created, which might make this pod schedulable", "pod", klog.KObj(pod), "PVC", klog.KObj(addedPvc))
+			return framework.Queue, nil
+		}
+	}
+
+	logger.V(5).Info("PVC irrelevant to the Pod was created, which doesn't make this pod schedulable", "pod", klog.KObj(pod), "PVC", klog.KObj(addedPvc))
 	return framework.QueueSkip, nil
 }
 

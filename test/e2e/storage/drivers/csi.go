@@ -54,7 +54,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
-	storagev1alpha1 "k8s.io/api/storage/v1alpha1"
+	storagev1beta1 "k8s.io/api/storage/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -215,8 +215,8 @@ func (h *hostpathCSIDriver) GetSnapshotClass(ctx context.Context, config *storag
 	return utils.GenerateSnapshotClassSpec(snapshotter, parameters, ns)
 }
 
-func (h *hostpathCSIDriver) GetVolumeAttributesClass(_ context.Context, config *storageframework.PerTestConfig) *storagev1alpha1.VolumeAttributesClass {
-	return storageframework.CopyVolumeAttributesClass(&storagev1alpha1.VolumeAttributesClass{
+func (h *hostpathCSIDriver) GetVolumeAttributesClass(_ context.Context, config *storageframework.PerTestConfig) *storagev1beta1.VolumeAttributesClass {
+	return storageframework.CopyVolumeAttributesClass(&storagev1beta1.VolumeAttributesClass{
 		DriverName: config.GetUniqueDriverName(),
 		Parameters: map[string]string{
 			hostpathCSIDriverMutableParameterName: hostpathCSIDriverMutableParameterValue,
@@ -344,6 +344,7 @@ type mockCSIDriver struct {
 	requiresRepublish             *bool
 	fsGroupPolicy                 *storagev1.FSGroupPolicy
 	enableVolumeMountGroup        bool
+	enableNodeVolumeCondition     bool
 	embedded                      bool
 	calls                         MockCSICalls
 	embeddedCSIDriver             *mockdriver.CSIDriver
@@ -393,6 +394,7 @@ type CSIMockDriverOpts struct {
 	EnableNodeExpansion           bool
 	EnableSnapshot                bool
 	EnableVolumeMountGroup        bool
+	EnableNodeVolumeCondition     bool
 	TokenRequests                 []storagev1.TokenRequest
 	RequiresRepublish             *bool
 	FSGroupPolicy                 *storagev1.FSGroupPolicy
@@ -547,6 +549,7 @@ func InitMockCSIDriver(driverOpts CSIMockDriverOpts) MockCSITestDriver {
 		attachable:                    !driverOpts.DisableAttach,
 		attachLimit:                   driverOpts.AttachLimit,
 		enableNodeExpansion:           driverOpts.EnableNodeExpansion,
+		enableNodeVolumeCondition:     driverOpts.EnableNodeVolumeCondition,
 		tokenRequests:                 driverOpts.TokenRequests,
 		requiresRepublish:             driverOpts.RequiresRepublish,
 		fsGroupPolicy:                 driverOpts.FSGroupPolicy,
@@ -621,12 +624,13 @@ func (m *mockCSIDriver) PrepareTest(ctx context.Context, f *framework.Framework)
 		// for cleanup callbacks.
 		ctx, cancel := context.WithCancel(context.Background())
 		serviceConfig := mockservice.Config{
-			DisableAttach:            !m.attachable,
-			DriverName:               "csi-mock-" + f.UniqueName,
-			AttachLimit:              int64(m.attachLimit),
-			NodeExpansionRequired:    m.enableNodeExpansion,
-			VolumeMountGroupRequired: m.enableVolumeMountGroup,
-			EnableTopology:           m.enableTopology,
+			DisableAttach:               !m.attachable,
+			DriverName:                  "csi-mock-" + f.UniqueName,
+			AttachLimit:                 int64(m.attachLimit),
+			NodeExpansionRequired:       m.enableNodeExpansion,
+			NodeVolumeConditionRequired: m.enableNodeVolumeCondition,
+			VolumeMountGroupRequired:    m.enableVolumeMountGroup,
+			EnableTopology:              m.enableTopology,
 			IO: proxy.PodDirIO{
 				F:             f,
 				Namespace:     m.driverNamespace.Name,
@@ -733,18 +737,6 @@ func (m *mockCSIDriver) PrepareTest(ctx context.Context, f *framework.Framework)
 					APIGroups: []string{""},
 					Resources: []string{"secrets"},
 					Verbs:     []string{"get", "list"},
-				})
-			}
-			if m.enableHonorPVReclaimPolicy && strings.HasPrefix(item.Name, "external-provisioner-runner") {
-				// The update verb is needed for testing the HonorPVReclaimPolicy feature gate.
-				// The feature gate is an alpha stage and is not enabled by default, so the verb
-				// is not added to the default rbac manifest.
-				// TODO: Remove this when the feature gate is promoted to beta or stable, and the
-				// verb is added to the default rbac manifest in the external-provisioner.
-				item.Rules = append(item.Rules, rbacv1.PolicyRule{
-					APIGroups: []string{""},
-					Resources: []string{"persistentvolumes"},
-					Verbs:     []string{"update"},
 				})
 			}
 		}

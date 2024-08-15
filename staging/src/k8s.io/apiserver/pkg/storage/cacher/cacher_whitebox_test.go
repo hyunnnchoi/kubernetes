@@ -24,6 +24,7 @@ import (
 	"reflect"
 	goruntime "runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -45,9 +46,13 @@ import (
 	examplev1 "k8s.io/apiserver/pkg/apis/example/v1"
 	"k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/storage"
+	"k8s.io/apiserver/pkg/storage/cacher/metrics"
 	etcd3testing "k8s.io/apiserver/pkg/storage/etcd3/testing"
+	etcdfeature "k8s.io/apiserver/pkg/storage/feature"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
+	k8smetrics "k8s.io/component-base/metrics"
+	"k8s.io/component-base/metrics/testutil"
 	"k8s.io/utils/clock"
 	testingclock "k8s.io/utils/clock/testing"
 	"k8s.io/utils/pointer"
@@ -180,6 +185,9 @@ func (d *dummyStorage) GuaranteedUpdate(_ context.Context, _ string, _ runtime.O
 func (d *dummyStorage) Count(_ string) (int64, error) {
 	return 0, fmt.Errorf("unimplemented")
 }
+func (d *dummyStorage) ReadinessCheck() error {
+	return nil
+}
 func (d *dummyStorage) injectError(err error) {
 	d.Lock()
 	defer d.Unlock()
@@ -200,7 +208,6 @@ func TestGetListCacheBypass(t *testing.T) {
 		{opts: storage.ListOptions{ResourceVersion: "0", Predicate: storage.SelectionPredicate{Continue: "a"}}, expectBypass: true},
 		{opts: storage.ListOptions{ResourceVersion: "1", Predicate: storage.SelectionPredicate{Continue: "a"}}, expectBypass: true},
 
-		{opts: storage.ListOptions{ResourceVersion: "", Predicate: storage.SelectionPredicate{Limit: 500}}, expectBypass: true},
 		{opts: storage.ListOptions{ResourceVersion: "0", Predicate: storage.SelectionPredicate{Limit: 500}}, expectBypass: false},
 		{opts: storage.ListOptions{ResourceVersion: "1", Predicate: storage.SelectionPredicate{Limit: 500}}, expectBypass: true},
 
@@ -213,6 +220,7 @@ func TestGetListCacheBypass(t *testing.T) {
 		featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ConsistentListFromCache, false)
 		testCases := append(commonTestCases,
 			testCase{opts: storage.ListOptions{ResourceVersion: ""}, expectBypass: true},
+			testCase{opts: storage.ListOptions{ResourceVersion: "", Predicate: storage.SelectionPredicate{Limit: 500}}, expectBypass: true},
 		)
 		for _, tc := range testCases {
 			testGetListCacheBypass(t, tc.opts, tc.expectBypass)
@@ -221,8 +229,18 @@ func TestGetListCacheBypass(t *testing.T) {
 	})
 	t.Run("ConsistentListFromCache", func(t *testing.T) {
 		featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ConsistentListFromCache, true)
+
+		// TODO(p0lyn0mial): the following tests assume that etcdfeature.DefaultFeatureSupportChecker.Supports(storage.RequestWatchProgress)
+		// evaluates to true. Otherwise the cache will be bypassed and the test will fail.
+		//
+		// If you were to run only TestGetListCacheBypass you would see that the test fail.
+		// However in CI all test are run and there must be a test(s) that properly
+		// initialize the storage layer so that the mentioned method evaluates to true
+		forceRequestWatchProgressSupport(t)
+
 		testCases := append(commonTestCases,
 			testCase{opts: storage.ListOptions{ResourceVersion: ""}, expectBypass: false},
+			testCase{opts: storage.ListOptions{ResourceVersion: "", Predicate: storage.SelectionPredicate{Limit: 500}}, expectBypass: false},
 		)
 		for _, tc := range testCases {
 			testGetListCacheBypass(t, tc.opts, tc.expectBypass)
@@ -274,7 +292,140 @@ func testGetListCacheBypass(t *testing.T, options storage.ListOptions, expectByp
 	}
 }
 
+func TestConsistentReadFallback(t *testing.T) {
+	tcs := []struct {
+		name                   string
+		consistentReadsEnabled bool
+		watchCacheRV           string
+		storageRV              string
+		fallbackError          bool
+
+		expectError             bool
+		expectRV                string
+		expectBlock             bool
+		expectRequestsToStorage int
+		expectMetric            string
+	}{
+		{
+			name:                    "Success",
+			consistentReadsEnabled:  true,
+			watchCacheRV:            "42",
+			storageRV:               "42",
+			expectRV:                "42",
+			expectRequestsToStorage: 1,
+			expectMetric: `
+# HELP apiserver_watch_cache_consistent_read_total [ALPHA] Counter for consistent reads from cache.
+# TYPE apiserver_watch_cache_consistent_read_total counter
+apiserver_watch_cache_consistent_read_total{fallback="false", resource="pods", success="true"} 1
+`,
+		},
+		{
+			name:                    "Fallback",
+			consistentReadsEnabled:  true,
+			watchCacheRV:            "2",
+			storageRV:               "42",
+			expectRV:                "42",
+			expectBlock:             true,
+			expectRequestsToStorage: 2,
+			expectMetric: `
+# HELP apiserver_watch_cache_consistent_read_total [ALPHA] Counter for consistent reads from cache.
+# TYPE apiserver_watch_cache_consistent_read_total counter
+apiserver_watch_cache_consistent_read_total{fallback="true", resource="pods", success="true"} 1
+`,
+		},
+		{
+			name:                    "Fallback Failure",
+			consistentReadsEnabled:  true,
+			watchCacheRV:            "2",
+			storageRV:               "42",
+			fallbackError:           true,
+			expectError:             true,
+			expectBlock:             true,
+			expectRequestsToStorage: 2,
+			expectMetric: `
+# HELP apiserver_watch_cache_consistent_read_total [ALPHA] Counter for consistent reads from cache.
+# TYPE apiserver_watch_cache_consistent_read_total counter
+apiserver_watch_cache_consistent_read_total{fallback="true", resource="pods", success="false"} 1
+`,
+		},
+		{
+			name:                    "Disabled",
+			watchCacheRV:            "2",
+			storageRV:               "42",
+			expectRV:                "42",
+			expectRequestsToStorage: 1,
+			expectMetric:            ``,
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ConsistentListFromCache, tc.consistentReadsEnabled)
+			if tc.consistentReadsEnabled {
+				forceRequestWatchProgressSupport(t)
+			}
+
+			registry := k8smetrics.NewKubeRegistry()
+			metrics.ConsistentReadTotal.Reset()
+			if err := registry.Register(metrics.ConsistentReadTotal); err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			backingStorage := &dummyStorage{}
+			backingStorage.getListFn = func(_ context.Context, key string, opts storage.ListOptions, listObj runtime.Object) error {
+				podList := listObj.(*example.PodList)
+				podList.ResourceVersion = tc.watchCacheRV
+				return nil
+			}
+			// TODO: Use fake clock for this test to reduce execution time.
+			cacher, _, err := newTestCacher(backingStorage)
+			if err != nil {
+				t.Fatalf("Couldn't create cacher: %v", err)
+			}
+			defer cacher.Stop()
+
+			if fmt.Sprintf("%d", cacher.watchCache.resourceVersion) != tc.watchCacheRV {
+				t.Fatalf("Expected watch cache RV to equal watchCacheRV, got: %d, want: %s", cacher.watchCache.resourceVersion, tc.watchCacheRV)
+			}
+			requestToStorageCount := 0
+			backingStorage.getListFn = func(_ context.Context, key string, opts storage.ListOptions, listObj runtime.Object) error {
+				requestToStorageCount += 1
+				podList := listObj.(*example.PodList)
+				if key == cacher.resourcePrefix {
+					podList.ResourceVersion = tc.storageRV
+					return nil
+				}
+				if tc.fallbackError {
+					return errDummy
+				}
+				podList.ResourceVersion = tc.storageRV
+				return nil
+			}
+			result := &example.PodList{}
+			start := cacher.clock.Now()
+			err = cacher.GetList(context.TODO(), "pods/ns", storage.ListOptions{ResourceVersion: ""}, result)
+			duration := cacher.clock.Since(start)
+			if (err != nil) != tc.expectError {
+				t.Fatalf("Unexpected error err: %v", err)
+			}
+			if result.ResourceVersion != tc.expectRV {
+				t.Fatalf("Unexpected List response RV, got: %q, want: %q", result.ResourceVersion, tc.expectRV)
+			}
+			if requestToStorageCount != tc.expectRequestsToStorage {
+				t.Fatalf("Unexpected number of requests to storage, got: %d, want: %d", requestToStorageCount, tc.expectRequestsToStorage)
+			}
+			blocked := duration >= blockTimeout
+			if blocked != tc.expectBlock {
+				t.Fatalf("Unexpected block, got: %v, want: %v", blocked, tc.expectBlock)
+			}
+
+			if err := testutil.GatherAndCompare(registry, strings.NewReader(tc.expectMetric), "apiserver_watch_cache_consistent_read_total"); err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestGetListNonRecursiveCacheBypass(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ConsistentListFromCache, false)
 	backingStorage := &dummyStorage{}
 	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
@@ -1741,6 +1892,7 @@ func TestCacheIntervalInvalidationStopsWatch(t *testing.T) {
 func TestWaitUntilWatchCacheFreshAndForceAllEvents(t *testing.T) {
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.WatchList, true)
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ConsistentListFromCache, true)
+	forceRequestWatchProgressSupport(t)
 
 	scenarios := []struct {
 		name               string
@@ -2051,8 +2203,8 @@ func TestForgetWatcher(t *testing.T) {
 		cacher.Lock()
 		defer cacher.Unlock()
 
-		require.Equal(t, expectedWatchersCounter, len(cacher.watchers.allWatchers))
-		require.Equal(t, expectedValueWatchersCounter, len(cacher.watchers.valueWatchers))
+		require.Len(t, cacher.watchers.allWatchers, expectedWatchersCounter)
+		require.Len(t, cacher.watchers.valueWatchers, expectedValueWatchersCounter)
 	}
 	assertCacherInternalState(0, 0)
 
@@ -2459,6 +2611,25 @@ func TestGetBookmarkAfterResourceVersionLockedFunc(t *testing.T) {
 }
 
 func TestWatchStreamSeparation(t *testing.T) {
+	server, etcdStorage := newEtcdTestStorage(t, etcd3testing.PathPrefix())
+	t.Cleanup(func() {
+		server.Terminate(t)
+	})
+	setupOpts := &setupOptions{}
+	withDefaults(setupOpts)
+	config := Config{
+		Storage:        etcdStorage,
+		Versioner:      storage.APIObjectVersioner{},
+		GroupResource:  schema.GroupResource{Resource: "pods"},
+		ResourcePrefix: setupOpts.resourcePrefix,
+		KeyFunc:        setupOpts.keyFunc,
+		GetAttrsFunc:   GetPodAttrs,
+		NewFunc:        newPod,
+		NewListFunc:    newPodList,
+		IndexerFuncs:   setupOpts.indexerFuncs,
+		Codec:          codecs.LegacyCodec(examplev1.SchemeGroupVersion),
+		Clock:          setupOpts.clock,
+	}
 	tcs := []struct {
 		name                         string
 		separateCacheWatchRPC        bool
@@ -2496,8 +2667,10 @@ func TestWatchStreamSeparation(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.SeparateCacheWatchRPC, tc.separateCacheWatchRPC)
-			_, cacher, _, terminate := testSetupWithEtcdServer(t)
-			t.Cleanup(terminate)
+			cacher, err := NewCacherFromConfig(config)
+			if err != nil {
+				t.Fatalf("Failed to initialize cacher: %v", err)
+			}
 
 			if !utilfeature.DefaultFeatureGate.Enabled(features.ResilientWatchCacheInitialization) {
 				if err := cacher.ready.wait(context.TODO()); err != nil {
@@ -2515,7 +2688,11 @@ func TestWatchStreamSeparation(t *testing.T) {
 			waitForEtcdBookmark := watchAndWaitForBookmark(t, waitContext, cacher.storage)
 
 			var out example.Pod
-			err := cacher.Create(context.Background(), "foo", &example.Pod{}, &out, 0)
+			err = cacher.Create(context.Background(), "foo", &example.Pod{}, &out, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = cacher.Delete(context.Background(), "foo", &out, nil, storage.ValidateAllObjectFunc, &example.Pod{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2554,6 +2731,63 @@ func TestWatchStreamSeparation(t *testing.T) {
 	}
 }
 
+func TestComputeListLimit(t *testing.T) {
+	scenarios := []struct {
+		name          string
+		opts          storage.ListOptions
+		expectedLimit int64
+	}{
+		{
+			name: "limit is zero",
+			opts: storage.ListOptions{
+				Predicate: storage.SelectionPredicate{
+					Limit: 0,
+				},
+			},
+			expectedLimit: 0,
+		},
+		{
+			name: "limit is positive, RV is unset",
+			opts: storage.ListOptions{
+				Predicate: storage.SelectionPredicate{
+					Limit: 1,
+				},
+				ResourceVersion: "",
+			},
+			expectedLimit: 1,
+		},
+		{
+			name: "limit is positive, RV = 100",
+			opts: storage.ListOptions{
+				Predicate: storage.SelectionPredicate{
+					Limit: 1,
+				},
+				ResourceVersion: "100",
+			},
+			expectedLimit: 1,
+		},
+		{
+			name: "legacy case: limit is positive, RV = 0",
+			opts: storage.ListOptions{
+				Predicate: storage.SelectionPredicate{
+					Limit: 1,
+				},
+				ResourceVersion: "0",
+			},
+			expectedLimit: 0,
+		},
+	}
+
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			actualLimit := computeListLimit(scenario.opts)
+			if actualLimit != scenario.expectedLimit {
+				t.Errorf("computeListLimit returned = %v, expected %v", actualLimit, scenario.expectedLimit)
+			}
+		})
+	}
+}
+
 func watchAndWaitForBookmark(t *testing.T, ctx context.Context, etcdStorage storage.Interface) func() (resourceVersion uint64) {
 	opts := storage.ListOptions{ResourceVersion: "", Predicate: storage.Everything, Recursive: true}
 	opts.Predicate.AllowWatchBookmarks = true
@@ -2582,5 +2816,24 @@ func watchAndWaitForBookmark(t *testing.T, ctx context.Context, etcdStorage stor
 			t.Fatal(err)
 		}
 		return rv
+	}
+}
+
+// TODO(p0lyn0mial): forceRequestWatchProgressSupport inits the storage layer
+// so that tests that require storage.RequestWatchProgress pass
+//
+// In the future we could have a function that would allow for setting the feature
+// only for duration of a test.
+func forceRequestWatchProgressSupport(t *testing.T) {
+	if etcdfeature.DefaultFeatureSupportChecker.Supports(storage.RequestWatchProgress) {
+		return
+	}
+
+	server, _ := newEtcdTestStorage(t, etcd3testing.PathPrefix())
+	defer server.Terminate(t)
+	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, wait.ForeverTestTimeout, true, func(_ context.Context) (bool, error) {
+		return etcdfeature.DefaultFeatureSupportChecker.Supports(storage.RequestWatchProgress), nil
+	}); err != nil {
+		t.Fatalf("failed to wait for required %v storage feature to initialize", storage.RequestWatchProgress)
 	}
 }
